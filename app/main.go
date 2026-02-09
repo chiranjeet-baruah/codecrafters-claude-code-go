@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 )
+
+// --- Entry Point ---
 
 func main() {
 	prompt := parsePrompt()
@@ -22,8 +25,43 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
-	fmt.Print(resp.Choices[0].Message.Content)
+
+	message := resp.Choices[0].Message
+	handleResponse(message)
 }
+
+// --- Response Handling ---
+
+func handleResponse(message openai.ChatCompletionMessage) {
+	if len(message.ToolCalls) == 0 {
+		fmt.Print(message.Content)
+		return
+	}
+
+	toolCall := message.ToolCalls[0]
+	if toolCall.Function.Name != "Read" {
+		fmt.Fprintf(os.Stderr, "unknown tool call: %s\n", toolCall.Function.Name)
+		os.Exit(1)
+	}
+
+	var args struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
+		fmt.Fprintf(os.Stderr, "error parsing tool arguments: %v\n", err)
+		os.Exit(1)
+	}
+
+	contents, err := os.ReadFile(args.FilePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error reading file: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Print(string(contents))
+}
+
+// --- CLI & Client Setup ---
 
 func parsePrompt() string {
 	var prompt string
@@ -33,6 +71,7 @@ func parsePrompt() string {
 	if prompt == "" {
 		panic("Prompt must not be empty")
 	}
+
 	return prompt
 }
 
@@ -51,6 +90,8 @@ func newClient() *openai.Client {
 	return &client
 }
 
+// --- LLM Interaction ---
+
 func complete(client *openai.Client, prompt string) (*openai.ChatCompletion, error) {
 	resp, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
 		Model:    "anthropic/claude-haiku-4.5",
@@ -60,11 +101,15 @@ func complete(client *openai.Client, prompt string) (*openai.ChatCompletion, err
 	if err != nil {
 		return nil, err
 	}
+
 	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in response")
 	}
+
 	return resp, nil
 }
+
+// --- Message & Tool Definitions ---
 
 func userMessage(content string) openai.ChatCompletionMessageParamUnion {
 	return openai.ChatCompletionMessageParamUnion{
