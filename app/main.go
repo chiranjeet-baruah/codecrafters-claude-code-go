@@ -18,47 +18,59 @@ func main() {
 	prompt := parsePrompt()
 	client := newClient()
 
-	resp, err := complete(client, prompt)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
 
-	message := resp.Choices[0].Message
-	handleResponse(message)
+	messages := []openai.ChatCompletionMessageParamUnion{
+		userMessage(prompt),
+	}
+
+	for {
+		resp, err := complete(client, messages)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+
+		message := resp.Choices[0].Message
+		messages = append(messages, assistantMessage(message))
+
+		if len(message.ToolCalls) == 0 {
+			fmt.Print(message.Content)
+			return
+		}
+
+		for _, toolCall := range message.ToolCalls {
+			result := handleToolCall(toolCall)
+			messages = append(messages, toolMessage(toolCall.ID, result))
+		}
+	}
 }
 
-// --- Response Handling ---
+// --- Tool Call Handling ---
 
-func handleResponse(message openai.ChatCompletionMessage) {
-	if len(message.ToolCalls) == 0 {
-		fmt.Print(message.Content)
-		return
+func handleToolCall(toolCall openai.ChatCompletionMessageToolCallUnion) string {
+	switch toolCall.Function.Name {
+	case "Read":
+		return readFile(toolCall.Function.Arguments)
+	default:
+		return fmt.Sprintf("error: unknown tool %q", toolCall.Function.Name)
 	}
+}
 
-	toolCall := message.ToolCalls[0]
-	if toolCall.Function.Name != "Read" {
-		fmt.Fprintf(os.Stderr, "unknown tool call: %s\n", toolCall.Function.Name)
-		os.Exit(1)
-	}
-
+func readFile(rawArgs string) string {
 	var args struct {
 		FilePath string `json:"file_path"`
 	}
-	if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-		fmt.Fprintf(os.Stderr, "error parsing tool arguments: %v\n", err)
-		os.Exit(1)
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
 	contents, err := os.ReadFile(args.FilePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading file: %v\n", err)
-		os.Exit(1)
+		return fmt.Sprintf("error reading file: %v", err)
 	}
 
-	fmt.Print(string(contents))
+	return string(contents)
 }
 
 // --- CLI & Client Setup ---
@@ -92,10 +104,10 @@ func newClient() *openai.Client {
 
 // --- LLM Interaction ---
 
-func complete(client *openai.Client, prompt string) (*openai.ChatCompletion, error) {
+func complete(client *openai.Client, messages []openai.ChatCompletionMessageParamUnion) (*openai.ChatCompletion, error) {
 	resp, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
 		Model:    "anthropic/claude-haiku-4.5",
-		Messages: []openai.ChatCompletionMessageParamUnion{userMessage(prompt)},
+		Messages: messages,
 		Tools:    []openai.ChatCompletionToolUnionParam{readFileTool()},
 	})
 	if err != nil {
@@ -115,6 +127,46 @@ func userMessage(content string) openai.ChatCompletionMessageParamUnion {
 	return openai.ChatCompletionMessageParamUnion{
 		OfUser: &openai.ChatCompletionUserMessageParam{
 			Content: openai.ChatCompletionUserMessageParamContentUnion{
+				OfString: openai.String(content),
+			},
+		},
+	}
+}
+
+func assistantMessage(message openai.ChatCompletionMessage) openai.ChatCompletionMessageParamUnion {
+	toolCalls := make([]openai.ChatCompletionMessageToolCallUnionParam, len(message.ToolCalls))
+	for i, tc := range message.ToolCalls {
+		toolCalls[i] = openai.ChatCompletionMessageToolCallUnionParam{
+			OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+				ID: tc.ID,
+				Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			},
+		}
+	}
+
+	param := &openai.ChatCompletionAssistantMessageParam{}
+	if message.Content != "" {
+		param.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+			OfString: openai.String(message.Content),
+		}
+	}
+	if len(toolCalls) > 0 {
+		param.ToolCalls = toolCalls
+	}
+
+	return openai.ChatCompletionMessageParamUnion{
+		OfAssistant: param,
+	}
+}
+
+func toolMessage(toolCallID, content string) openai.ChatCompletionMessageParamUnion {
+	return openai.ChatCompletionMessageParamUnion{
+		OfTool: &openai.ChatCompletionToolMessageParam{
+			ToolCallID: toolCallID,
+			Content: openai.ChatCompletionToolMessageParamContentUnion{
 				OfString: openai.String(content),
 			},
 		},
