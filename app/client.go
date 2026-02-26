@@ -41,7 +41,7 @@ func complete(client *openai.Client, messages []openai.ChatCompletionMessagePara
 	resp, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
 		Model:    "anthropic/claude-haiku-4.5",
 		Messages: messages,
-		Tools:    []openai.ChatCompletionToolUnionParam{readFileTool(), writeFileTool()},
+		Tools:    []openai.ChatCompletionToolUnionParam{readFileTool(), writeFileTool(), bashTool()},
 	})
 	if err != nil {
 		return nil, err

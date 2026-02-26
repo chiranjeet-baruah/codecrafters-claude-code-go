@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
@@ -15,6 +16,8 @@ func handleToolCall(toolCall openai.ChatCompletionMessageToolCallUnion) string {
 		return readFile(toolCall.Function.Arguments)
 	case "Write":
 		return writeFile(toolCall.Function.Arguments)
+	case "Bash":
+		return executeBashCommand(toolCall.Function.Arguments)
 	default:
 		return fmt.Sprintf("error: unknown tool %q", toolCall.Function.Name)
 	}
@@ -50,6 +53,28 @@ func writeFile(rawArgs string) string {
 	}
 
 	return "success"
+}
+
+func executeBashCommand(rawArgs string) string {
+	var args struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+
+	output, err := executeCommand(args.Command)
+	if err != nil {
+		return fmt.Sprintf("error executing command: %v", err)
+	}
+
+	return output
+}
+
+func executeCommand(command string) (string, error) {
+	cmd := exec.Command("bash", "-c", command)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
 }
 
 func readFileTool() openai.ChatCompletionToolUnionParam {
@@ -92,6 +117,29 @@ func writeFileTool() openai.ChatCompletionToolUnionParam {
 						},
 					},
 					"required": []string{"file_path", "content"},
+				},
+			},
+		},
+	}
+}
+
+func bashTool() openai.ChatCompletionToolUnionParam {
+	return openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: shared.FunctionDefinitionParam{
+				Name:        "Bash",
+				Description: openai.String("Execute a shell command"),
+				Parameters: shared.FunctionParameters{
+					"type": "object",
+					"required": []string{
+						"command",
+					},
+					"properties": map[string]interface{}{
+						"command": map[string]interface{}{
+							"type":        "string",
+							"description": "The command to execute",
+						},
+					},
 				},
 			},
 		},
