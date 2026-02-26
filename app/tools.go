@@ -63,18 +63,13 @@ func executeBashCommand(rawArgs string) string {
 		return fmt.Sprintf("error parsing arguments: %v", err)
 	}
 
-	output, err := executeCommand(args.Command)
+	cmd := exec.Command("bash", "-c", args.Command)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Sprintf("error executing command: %v", err)
 	}
 
-	return output
-}
-
-func executeCommand(command string) (string, error) {
-	cmd := exec.Command("bash", "-c", command)
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+	return string(output)
 }
 
 func readFileTool() openai.ChatCompletionToolUnionParam {
