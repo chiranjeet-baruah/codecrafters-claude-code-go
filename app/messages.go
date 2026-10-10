@@ -8,7 +8,7 @@ import (
 	"github.com/openai/openai-go/v3"
 )
 
-func initialMessages(prompt string, skills []skillInfo) ([]openai.ChatCompletionMessageParamUnion, error) {
+func initialMessages(prompt string, skills []skillInfo, client *openai.Client) ([]openai.ChatCompletionMessageParamUnion, error) {
 	prompts := []string{prompt}
 	if strings.HasPrefix(prompt, "/") {
 		commands := strings.Fields(prompt)
@@ -26,6 +26,9 @@ func initialMessages(prompt string, skills []skillInfo) ([]openai.ChatCompletion
 			found := false
 			for _, skill := range skills {
 				if skill.name == strings.TrimPrefix(command, "/") {
+					if skill.context == "fork" && len(selected) > 0 {
+						break
+					}
 					selected = append(selected, skill)
 					found = true
 					break
@@ -35,17 +38,20 @@ func initialMessages(prompt string, skills []skillInfo) ([]openai.ChatCompletion
 				break
 			}
 			arguments = strings.TrimLeftFunc(arguments[len(command):], unicode.IsSpace)
+			if selected[len(selected)-1].context == "fork" {
+				break
+			}
 		}
 		if len(selected) == 0 {
 			return nil, fmt.Errorf("unknown skill %q", name)
 		}
 		prompts = make([]string, 0, len(selected))
 		for _, skill := range selected {
-			body, err := readSkillBody(skill.path)
+			content, err := executeSkill(client, skill, arguments, skills)
 			if err != nil {
-				return nil, fmt.Errorf("load skill %q: %w", skill.name, err)
+				return nil, err
 			}
-			prompts = append(prompts, substituteSkillArguments(body, arguments))
+			prompts = append(prompts, content)
 		}
 	}
 

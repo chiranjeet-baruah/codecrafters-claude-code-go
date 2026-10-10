@@ -80,7 +80,7 @@ func TestHandleToolCall(t *testing.T) {
 			call := openai.ChatCompletionMessageToolCallUnion{
 				Function: openai.ChatCompletionMessageFunctionToolCallFunction{Name: tt.tool, Arguments: args},
 			}
-			got := handleToolCall(call, nil)
+			got := handleToolCall(call, nil, nil)
 			if tt.wantPrefix != "" {
 				if !strings.HasPrefix(got, tt.wantPrefix) {
 					t.Fatalf("result = %q, want prefix %q", got, tt.wantPrefix)
@@ -162,7 +162,7 @@ func TestHandleSkillToolCall(t *testing.T) {
 			call := openai.ChatCompletionMessageToolCallUnion{
 				Function: openai.ChatCompletionMessageFunctionToolCallFunction{Name: "Skill", Arguments: tt.arguments},
 			}
-			got := handleToolCall(call, skills)
+			got := handleToolCall(call, skills, nil)
 			if tt.wantPrefix != "" {
 				if !strings.HasPrefix(got, tt.wantPrefix) {
 					t.Fatalf("result = %q, want prefix %q", got, tt.wantPrefix)

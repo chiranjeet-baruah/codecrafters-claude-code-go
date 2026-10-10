@@ -18,12 +18,22 @@ func chatResponse(content string) string {
 	return fmt.Sprintf(`{"id":"chat_1","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":%q},"finish_reason":"stop"}]}`, content)
 }
 
-func TestCLI(t *testing.T) {
+func buildTestCLI(t *testing.T) string {
+	t.Helper()
 	binary := filepath.Join(t.TempDir(), "agent")
 	build := exec.Command("go", "build", "-o", binary, ".")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build CLI: %v\n%s", err, output)
 	}
+	return binary
+}
+
+func toolResponse(id, name, arguments string) string {
+	return fmt.Sprintf(`{"id":"chat_1","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":%q,"type":"function","function":{"name":%q,"arguments":%q}}]},"finish_reason":"tool_calls"}]}`, id, name, arguments)
+}
+
+func TestCLI(t *testing.T) {
+	binary := buildTestCLI(t)
 
 	type cliTest struct {
 		name         string

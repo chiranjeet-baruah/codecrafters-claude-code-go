@@ -40,7 +40,7 @@ func decodeMessages(t *testing.T, prompt, root string) ([]testMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	messages, err := initialMessages(prompt, skills)
+	messages, err := initialMessages(prompt, skills, nil)
 	if err != nil {
 		if messages != nil {
 			t.Fatalf("got messages on error: %+v", messages)
@@ -291,7 +291,7 @@ func TestReadSkillFrontmatter(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := bufio.NewReader(strings.NewReader(tt.input))
-			name, description, err := readSkillFrontmatter(reader)
+			name, description, _, err := readSkillFrontmatter(reader)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
@@ -337,6 +337,41 @@ func TestReadSkillBody(t *testing.T) {
 			}
 			if err != nil || body != tt.wantBody {
 				t.Fatalf("body = %q, error = %v; want %q", body, err, tt.wantBody)
+			}
+		})
+	}
+}
+
+func TestSkillContext(t *testing.T) {
+	tests := []struct {
+		name, frontmatter, wantContext string
+	}{
+		{"absent", "", ""},
+		{"plain fork", "context: fork\n", "fork"},
+		{"no space", "context:fork\n", "fork"},
+		{"double quoted", "context: \"fork\"\n", "fork"},
+		{"single quoted", "context: 'fork'\n", "fork"},
+		{"surrounding whitespace", " context : \tfork \t\n", "fork"},
+		{"other context", "context: inline\n", "inline"},
+		{"case sensitive", "context: Fork\n", "Fork"},
+		{"agent ignored", "agent: fork\n", ""},
+		{"fork with agent", "context: fork\nagent: reviewer\n", "fork"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeRawSkill(t, dir, "apple", "---\nname: apple\ndescription: On-call rotation.\n"+tt.frontmatter+"---\n\nsecret body\n")
+			skills, err := discoverSkills(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []skillInfo{{name: "apple", description: "On-call rotation.", context: tt.wantContext, path: filepath.Join(dir, "apple", "SKILL.md")}}
+			if !reflect.DeepEqual(skills, want) {
+				t.Fatalf("skills = %+v, want %+v", skills, want)
+			}
+			body, err := readSkillBody(skills[0].path)
+			if err != nil || body != "secret body" {
+				t.Fatalf("body = %q, error = %v", body, err)
 			}
 		})
 	}

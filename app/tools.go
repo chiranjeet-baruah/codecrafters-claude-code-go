@@ -10,7 +10,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-func handleToolCall(toolCall openai.ChatCompletionMessageToolCallUnion, skills []skillInfo) string {
+func handleToolCall(toolCall openai.ChatCompletionMessageToolCallUnion, skills []skillInfo, client *openai.Client) string {
 	switch toolCall.Function.Name {
 	case "Read":
 		return readFile(toolCall.Function.Arguments)
@@ -19,13 +19,13 @@ func handleToolCall(toolCall openai.ChatCompletionMessageToolCallUnion, skills [
 	case "Bash":
 		return executeBashCommand(toolCall.Function.Arguments)
 	case "Skill":
-		return invokeSkill(toolCall.Function.Arguments, skills)
+		return invokeSkill(toolCall.Function.Arguments, skills, client)
 	default:
 		return fmt.Sprintf("error: unknown tool %q", toolCall.Function.Name)
 	}
 }
 
-func invokeSkill(rawArgs string, skills []skillInfo) string {
+func invokeSkill(rawArgs string, skills []skillInfo, client *openai.Client) string {
 	var args struct {
 		Name string `json:"name"`
 		Args string `json:"args"`
@@ -38,11 +38,11 @@ func invokeSkill(rawArgs string, skills []skillInfo) string {
 	}
 	for _, skill := range skills {
 		if skill.name == args.Name {
-			body, err := readSkillBody(skill.path)
+			content, err := executeSkill(client, skill, args.Args, skills)
 			if err != nil {
-				return fmt.Sprintf("error loading skill %q: %v", args.Name, err)
+				return fmt.Sprintf("error %v", err)
 			}
-			return substituteSkillArguments(body, args.Args)
+			return content
 		}
 	}
 	return fmt.Sprintf("error: unknown skill %q", args.Name)

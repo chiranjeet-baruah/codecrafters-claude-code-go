@@ -9,12 +9,31 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/openai/openai-go/v3"
 )
 
 type skillInfo struct {
 	name        string
 	description string
+	context     string
 	path        string
+}
+
+func executeSkill(client *openai.Client, skill skillInfo, arguments string, skills []skillInfo) (string, error) {
+	body, err := readSkillBody(skill.path)
+	if err != nil {
+		return "", fmt.Errorf("loading skill %q: %w", skill.name, err)
+	}
+	body = substituteSkillArguments(body, arguments)
+	if skill.context != "fork" {
+		return body, nil
+	}
+	answer, err := runAgent(client, []openai.ChatCompletionMessageParamUnion{userMessage(body)}, skills)
+	if err != nil {
+		return "", fmt.Errorf("running skill %q in separate context: %w", skill.name, err)
+	}
+	return fmt.Sprintf("Skill %s ran in a separate context and returned: %s", skill.name, answer), nil
 }
 
 var skillPlaceholder = regexp.MustCompile(`\$(?:ARGUMENTS(?:\[[0-9]+\])?|[0-9]+)`)
@@ -72,7 +91,7 @@ func discoverSkills(dir string) ([]skillInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open skill %q: %w", entry.Name(), err)
 		}
-		name, description, err := readSkillFrontmatter(bufio.NewReader(file))
+		name, description, context, err := readSkillFrontmatter(bufio.NewReader(file))
 		file.Close()
 		if err != nil {
 			return nil, fmt.Errorf("parse skill %q: %w", entry.Name(), err)
@@ -80,7 +99,7 @@ func discoverSkills(dir string) ([]skillInfo, error) {
 		if name != entry.Name() {
 			return nil, fmt.Errorf("skill %q has mismatched name %q", entry.Name(), name)
 		}
-		skills = append(skills, skillInfo{name: name, description: description, path: path})
+		skills = append(skills, skillInfo{name: name, description: description, context: context, path: path})
 	}
 	return skills, nil
 }
@@ -93,7 +112,7 @@ func readSkillBody(path string) (string, error) {
 	defer file.Close()
 
 	reader := bufio.NewReader(file)
-	if _, _, err := readSkillFrontmatter(reader); err != nil {
+	if _, _, _, err := readSkillFrontmatter(reader); err != nil {
 		return "", fmt.Errorf("parse skill body: %w", err)
 	}
 	body, err := io.ReadAll(reader)
@@ -103,27 +122,27 @@ func readSkillBody(path string) (string, error) {
 	return strings.Trim(string(body), "\r\n"), nil
 }
 
-func readSkillFrontmatter(reader *bufio.Reader) (string, string, error) {
+func readSkillFrontmatter(reader *bufio.Reader) (string, string, string, error) {
 	first, err := reader.ReadString('\n')
 	if err != nil && err != io.EOF {
-		return "", "", err
+		return "", "", "", err
 	}
 	if strings.TrimRight(first, "\r\n") != "---" {
-		return "", "", fmt.Errorf("missing opening ---")
+		return "", "", "", fmt.Errorf("missing opening ---")
 	}
 
-	var name, description string
+	var name, description, context string
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil && err != io.EOF {
-			return "", "", err
+			return "", "", "", err
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "---" {
 			if name == "" || description == "" {
-				return "", "", fmt.Errorf("missing name or description")
+				return "", "", "", fmt.Errorf("missing name or description")
 			}
-			return name, description, nil
+			return name, description, context, nil
 		}
 		key, value, ok := strings.Cut(line, ":")
 		if ok {
@@ -131,7 +150,7 @@ func readSkillFrontmatter(reader *bufio.Reader) (string, string, error) {
 			if strings.HasPrefix(value, "\"") {
 				value, err = strconv.Unquote(value)
 				if err != nil {
-					return "", "", fmt.Errorf("invalid quoted %s: %w", key, err)
+					return "", "", "", fmt.Errorf("invalid quoted %s: %w", key, err)
 				}
 			} else if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
 				value = strings.ReplaceAll(value[1:len(value)-1], "''", "'")
@@ -141,10 +160,12 @@ func readSkillFrontmatter(reader *bufio.Reader) (string, string, error) {
 				name = value
 			case "description":
 				description = value
+			case "context":
+				context = value
 			}
 		}
 		if err == io.EOF {
-			return "", "", fmt.Errorf("missing closing ---")
+			return "", "", "", fmt.Errorf("missing closing ---")
 		}
 	}
 }
