@@ -10,7 +10,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-func handleToolCall(toolCall openai.ChatCompletionMessageToolCallUnion) string {
+func handleToolCall(toolCall openai.ChatCompletionMessageToolCallUnion, skills []skillInfo) string {
 	switch toolCall.Function.Name {
 	case "Read":
 		return readFile(toolCall.Function.Arguments)
@@ -18,9 +18,34 @@ func handleToolCall(toolCall openai.ChatCompletionMessageToolCallUnion) string {
 		return writeFile(toolCall.Function.Arguments)
 	case "Bash":
 		return executeBashCommand(toolCall.Function.Arguments)
+	case "Skill":
+		return invokeSkill(toolCall.Function.Arguments, skills)
 	default:
 		return fmt.Sprintf("error: unknown tool %q", toolCall.Function.Name)
 	}
+}
+
+func invokeSkill(rawArgs string, skills []skillInfo) string {
+	var args struct {
+		Name string `json:"name"`
+		Args string `json:"args"`
+	}
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return fmt.Sprintf("error parsing arguments: %v", err)
+	}
+	if !validSkillName(args.Name) {
+		return fmt.Sprintf("error: invalid skill name %q", args.Name)
+	}
+	for _, skill := range skills {
+		if skill.name == args.Name {
+			body, err := readSkillBody(skill.path)
+			if err != nil {
+				return fmt.Sprintf("error loading skill %q: %v", args.Name, err)
+			}
+			return substituteSkillArguments(body, args.Args)
+		}
+	}
+	return fmt.Sprintf("error: unknown skill %q", args.Name)
 }
 
 func readFile(rawArgs string) string {
@@ -133,6 +158,31 @@ func bashTool() openai.ChatCompletionToolUnionParam {
 						"command": map[string]interface{}{
 							"type":        "string",
 							"description": "The command to execute",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func skillTool() openai.ChatCompletionToolUnionParam {
+	return openai.ChatCompletionToolUnionParam{
+		OfFunction: &openai.ChatCompletionFunctionToolParam{
+			Function: shared.FunctionDefinitionParam{
+				Name:        "Skill",
+				Description: openai.String("Load a skill's instructions into the conversation"),
+				Parameters: shared.FunctionParameters{
+					"type":     "object",
+					"required": []string{"name"},
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type":        "string",
+							"description": "The name of the skill to use",
+						},
+						"args": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional arguments for the skill",
 						},
 					},
 				},

@@ -8,12 +8,7 @@ import (
 	"github.com/openai/openai-go/v3"
 )
 
-func initialMessages(prompt, skillsDir string) ([]openai.ChatCompletionMessageParamUnion, error) {
-	skills, err := discoverSkills(skillsDir)
-	if err != nil {
-		return nil, err
-	}
-
+func initialMessages(prompt string, skills []skillInfo) ([]openai.ChatCompletionMessageParamUnion, error) {
 	prompts := []string{prompt}
 	if strings.HasPrefix(prompt, "/") {
 		commands := strings.Fields(prompt)
@@ -64,6 +59,7 @@ func initialMessages(prompt, skillsDir string) ([]openai.ChatCompletionMessagePa
 			}
 			fmt.Fprintf(&description, "- %s: %s", skill.name, skill.description)
 		}
+		description.WriteString("\n\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns.")
 		messages = append(messages, openai.SystemMessage(description.String()))
 	}
 	for _, content := range prompts {

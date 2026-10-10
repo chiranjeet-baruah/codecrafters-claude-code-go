@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -68,13 +69,24 @@ func TestNewClientAndComplete(t *testing.T) {
 				var request struct {
 					Model    string        `json:"model"`
 					Messages []testMessage `json:"messages"`
-					Tools    []any         `json:"tools"`
+					Tools    []struct {
+						Function struct {
+							Name string `json:"name"`
+						} `json:"function"`
+					} `json:"tools"`
 				}
 				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 					t.Errorf("decode request: %v", err)
 				}
-				if request.Model != "anthropic/claude-haiku-4.5" || len(request.Messages) != 1 || request.Messages[0].Content != "hello" || len(request.Tools) != 3 {
+				if request.Model != "anthropic/claude-haiku-4.5" || len(request.Messages) != 1 || request.Messages[0].Content != "hello" {
 					t.Errorf("unexpected request: %+v", request)
+				}
+				var tools []string
+				for _, tool := range request.Tools {
+					tools = append(tools, tool.Function.Name)
+				}
+				if !reflect.DeepEqual(tools, []string{"Read", "Write", "Bash", "Skill"}) {
+					t.Errorf("tools = %v, want Read, Write, Bash, Skill", tools)
 				}
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tt.status)

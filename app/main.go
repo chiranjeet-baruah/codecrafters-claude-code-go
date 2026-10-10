@@ -7,7 +7,12 @@ import (
 
 func main() {
 	prompt := parsePrompt()
-	messages, err := initialMessages(prompt, ".claude/skills")
+	skills, err := discoverSkills(".claude/skills")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	messages, err := initialMessages(prompt, skills)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -32,7 +37,7 @@ func main() {
 		}
 
 		for _, toolCall := range message.ToolCalls {
-			result := handleToolCall(toolCall)
+			result := handleToolCall(toolCall, skills)
 			messages = append(messages, toolMessage(toolCall.ID, result))
 		}
 	}

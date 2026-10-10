@@ -25,16 +25,18 @@ func TestCLI(t *testing.T) {
 		t.Fatalf("build CLI: %v\n%s", err, output)
 	}
 
-	tests := []struct {
-		name       string
-		prompt     string
-		setup      func(*testing.T, string)
-		responses  func(*testing.T, string) []string
-		wantCalls  int
-		wantOutput string
-		wantError  bool
-		check      func(*testing.T, []testMessage)
-	}{
+	type cliTest struct {
+		name         string
+		prompt       string
+		setup        func(*testing.T, string)
+		responses    func(*testing.T, string) []string
+		wantCalls    int
+		wantOutput   string
+		wantError    bool
+		check        func(*testing.T, []testMessage)
+		checkRequest func(*testing.T, int, json.RawMessage)
+	}
+	tests := []cliTest{
 		{
 			name: "ordinary prompt", prompt: "hello", wantCalls: 1, wantOutput: "done",
 			check: func(t *testing.T, messages []testMessage) {
@@ -68,7 +70,7 @@ func TestCLI(t *testing.T) {
 			},
 			check: func(t *testing.T, messages []testMessage) {
 				want := "Deploy to staging in region eu-west. Full request was: staging eu-west"
-				if len(messages) != 2 || messages[0] != (testMessage{Role: "system", Content: "You have access to the following skills:\n\n- apple: Deploy service.\n- banana: Other skill."}) || messages[1] != (testMessage{Role: "user", Content: want}) {
+				if len(messages) != 2 || messages[0] != (testMessage{Role: "system", Content: "You have access to the following skills:\n\n- apple: Deploy service.\n- banana: Other skill." + skillInstruction}) || messages[1] != (testMessage{Role: "user", Content: want}) {
 					t.Errorf("messages = %+v", messages)
 				}
 			},
@@ -86,7 +88,7 @@ func TestCLI(t *testing.T) {
 			},
 			check: func(t *testing.T, messages []testMessage) {
 				want := []testMessage{
-					{"system", "You have access to the following skills:\n\n- apple: Apple service.\n- banana: Banana service.\n- grape: Grape service."},
+					{"system", "You have access to the following skills:\n\n- apple: Apple service.\n- banana: Banana service.\n- grape: Grape service." + skillInstruction},
 					{"user", "Add this exact line to your response: blueberry-4127"},
 					{"user", "Add this exact line to your response: cherry-4127"},
 				}
@@ -120,6 +122,64 @@ func TestCLI(t *testing.T) {
 			},
 		},
 	}
+	for _, skillCase := range []struct {
+		name, prompt, body, arguments, result, output string
+	}{
+		{
+			name: "model invokes matching skill", prompt: "What is the database migration status?",
+			body: "Respond with exactly one word: blueberry", arguments: `{"name":"apple"}`,
+			result: "Respond with exactly one word: blueberry", output: "blueberry",
+		},
+		{
+			name: "model invokes skill with arguments", prompt: "What is the database migration status for staging eu-west?",
+			body: "Respond with blueberry-$0/$ARGUMENTS[1]. Full request: $ARGUMENTS", arguments: `{"name":"apple","args":"staging eu-west"}`,
+			result: "Respond with blueberry-staging/eu-west. Full request: staging eu-west", output: "blueberry-staging/eu-west",
+		},
+		{
+			name: "model receives skill error", prompt: "What is the database migration status?",
+			body: "Respond with exactly one word: blueberry", arguments: `{"name":"missing"}`,
+			result: `error: unknown skill "missing"`, output: "done",
+		},
+	} {
+		tests = append(tests, cliTest{
+			name: skillCase.name, prompt: skillCase.prompt, wantCalls: 2, wantOutput: skillCase.output,
+			setup: func(t *testing.T, root string) {
+				dir := filepath.Join(root, ".claude", "skills")
+				writeTestSkill(t, dir, "apple", "Use this skill when the user asks for the database migration status.", skillCase.body)
+				writeTestSkill(t, dir, "grape", "Use this skill when the user asks to format source code.", "Respond with secret-grape-word")
+			},
+			responses: func(t *testing.T, root string) []string {
+				return []string{
+					fmt.Sprintf(`{"id":"chat_1","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"skill_1","type":"function","function":{"name":"Skill","arguments":%q}}]},"finish_reason":"tool_calls"}]}`, skillCase.arguments),
+					chatResponse(skillCase.output),
+				}
+			},
+			checkRequest: func(t *testing.T, call int, data json.RawMessage) {
+				var request struct {
+					Messages []map[string]any `json:"messages"`
+				}
+				if err := json.Unmarshal(data, &request); err != nil {
+					t.Errorf("decode skill request: %v", err)
+					return
+				}
+				want := []map[string]any{
+					{"role": "system", "content": "You have access to the following skills:\n\n- apple: Use this skill when the user asks for the database migration status.\n- grape: Use this skill when the user asks to format source code." + skillInstruction},
+					{"role": "user", "content": skillCase.prompt},
+				}
+				if call == 1 {
+					want = append(want,
+						map[string]any{"role": "assistant", "tool_calls": []any{
+							map[string]any{"id": "skill_1", "type": "function", "function": map[string]any{"name": "Skill", "arguments": skillCase.arguments}},
+						}},
+						map[string]any{"role": "tool", "tool_call_id": "skill_1", "content": skillCase.result},
+					)
+				}
+				if !reflect.DeepEqual(request.Messages, want) {
+					t.Errorf("request %d messages = %+v, want %+v", call+1, request.Messages, want)
+				}
+			},
+		})
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -138,10 +198,17 @@ func TestCLI(t *testing.T) {
 					http.Error(w, "unexpected call", http.StatusBadRequest)
 					return
 				}
+				var data json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+					t.Errorf("decode request: %v", err)
+				}
+				if tt.checkRequest != nil {
+					tt.checkRequest(t, call, data)
+				}
 				var request struct {
 					Messages []testMessage `json:"messages"`
 				}
-				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				if err := json.Unmarshal(data, &request); err != nil {
 					t.Errorf("decode request: %v", err)
 				}
 				if tt.check != nil && call == len(responses)-1 {

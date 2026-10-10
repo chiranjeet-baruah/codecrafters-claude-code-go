@@ -16,6 +16,8 @@ type testMessage struct {
 	Content string `json:"content"`
 }
 
+const skillInstruction = "\n\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns."
+
 func writeTestSkill(t *testing.T, root, name, description, body string) {
 	t.Helper()
 	writeRawSkill(t, root, name, "---\nname: "+name+"\ndescription: "+description+"\n---\n\n"+body+"\n")
@@ -34,7 +36,11 @@ func writeRawSkill(t *testing.T, root, name, content string) {
 
 func decodeMessages(t *testing.T, prompt, root string) ([]testMessage, error) {
 	t.Helper()
-	messages, err := initialMessages(prompt, root)
+	skills, err := discoverSkills(root)
+	if err != nil {
+		return nil, err
+	}
+	messages, err := initialMessages(prompt, skills)
 	if err != nil {
 		if messages != nil {
 			t.Fatalf("got messages on error: %+v", messages)
@@ -53,7 +59,7 @@ func decodeMessages(t *testing.T, prompt, root string) ([]testMessage, error) {
 }
 
 func TestInitialMessages(t *testing.T) {
-	const system = "You have access to the following skills:\n\n- apple: Reports the deploy target.\n- banana: Explains the banana service."
+	const system = "You have access to the following skills:\n\n- apple: Reports the deploy target.\n- banana: Explains the banana service." + skillInstruction
 	const body = "Respond with exactly one word: blueberry\n\nDo not add any other text."
 	tests := []struct {
 		name    string
@@ -79,7 +85,7 @@ func TestInitialMessages(t *testing.T) {
 			setup: func(t *testing.T, root string) {
 				writeTestSkill(t, root, "apple", "Deploy $0.", "Deploy to $0 in region $ARGUMENTS[1]. Full request was: $ARGUMENTS")
 			},
-			want: []testMessage{{"system", "You have access to the following skills:\n\n- apple: Deploy $0."}, {"user", "Deploy to staging in region eu-west. Full request was: staging  eu-west"}},
+			want: []testMessage{{"system", "You have access to the following skills:\n\n- apple: Deploy $0." + skillInstruction}, {"user", "Deploy to staging in region eu-west. Full request was: staging  eu-west"}},
 		},
 		{
 			name:   "ordinary prompt keeps prompt and skill descriptions",
@@ -87,7 +93,7 @@ func TestInitialMessages(t *testing.T) {
 			setup: func(t *testing.T, root string) {
 				writeTestSkill(t, root, "apple", "Reports the deploy target.", "hidden instructions")
 			},
-			want:   []testMessage{{"system", "You have access to the following skills:\n\n- apple: Reports the deploy target."}, {"user", "Where should I deploy $0 $ARGUMENTS[1] $ARGUMENTS?"}},
+			want:   []testMessage{{"system", "You have access to the following skills:\n\n- apple: Reports the deploy target." + skillInstruction}, {"user", "Where should I deploy $0 $ARGUMENTS[1] $ARGUMENTS?"}},
 			forbid: []string{"hidden instructions"},
 		},
 		{name: "no skills directory", prompt: "ordinary prompt", want: []testMessage{{"user", "ordinary prompt"}}},
@@ -168,7 +174,7 @@ func TestInitialMessages(t *testing.T) {
 }
 
 func TestStackedSkillMessages(t *testing.T) {
-	const system = "You have access to the following skills:\n\n- apple: Apple service.\n- banana: Banana service.\n- grape: Grape service."
+	const system = "You have access to the following skills:\n\n- apple: Apple service.\n- banana: Banana service.\n- grape: Grape service." + skillInstruction
 	tests := []struct {
 		name, prompt string
 		want         []string
