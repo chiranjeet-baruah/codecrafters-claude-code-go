@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/openai/openai-go/v3"
 )
@@ -13,33 +14,47 @@ func initialMessages(prompt, skillsDir string) ([]openai.ChatCompletionMessagePa
 		return nil, err
 	}
 
+	prompts := []string{prompt}
 	if strings.HasPrefix(prompt, "/") {
-		command := strings.Fields(prompt)[0]
-		name := strings.TrimPrefix(command, "/")
-		arguments := prompt[len(command):]
+		commands := strings.Fields(prompt)
+		name := strings.TrimPrefix(commands[0], "/")
 		if !validSkillName(name) {
 			return nil, fmt.Errorf("invalid skill name %q", name)
 		}
 
-		found := false
-		for _, skill := range skills {
-			if skill.name != name {
-				continue
+		arguments := prompt
+		var selected []skillInfo
+		for _, command := range commands {
+			if !strings.HasPrefix(command, "/") {
+				break
 			}
-			prompt, err = readSkillBody(skill.path)
-			if err != nil {
-				return nil, fmt.Errorf("load skill %q: %w", name, err)
+			found := false
+			for _, skill := range skills {
+				if skill.name == strings.TrimPrefix(command, "/") {
+					selected = append(selected, skill)
+					found = true
+					break
+				}
 			}
-			prompt = substituteSkillArguments(prompt, arguments)
-			found = true
-			break
+			if !found {
+				break
+			}
+			arguments = strings.TrimLeftFunc(arguments[len(command):], unicode.IsSpace)
 		}
-		if !found {
+		if len(selected) == 0 {
 			return nil, fmt.Errorf("unknown skill %q", name)
+		}
+		prompts = make([]string, 0, len(selected))
+		for _, skill := range selected {
+			body, err := readSkillBody(skill.path)
+			if err != nil {
+				return nil, fmt.Errorf("load skill %q: %w", skill.name, err)
+			}
+			prompts = append(prompts, substituteSkillArguments(body, arguments))
 		}
 	}
 
-	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 2)
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(prompts)+1)
 	if len(skills) > 0 {
 		var description strings.Builder
 		description.WriteString("You have access to the following skills:\n\n")
@@ -51,7 +66,10 @@ func initialMessages(prompt, skillsDir string) ([]openai.ChatCompletionMessagePa
 		}
 		messages = append(messages, openai.SystemMessage(description.String()))
 	}
-	return append(messages, userMessage(prompt)), nil
+	for _, content := range prompts {
+		messages = append(messages, userMessage(content))
+	}
+	return messages, nil
 }
 
 func userMessage(content string) openai.ChatCompletionMessageParamUnion {

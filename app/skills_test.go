@@ -167,6 +167,45 @@ func TestInitialMessages(t *testing.T) {
 	}
 }
 
+func TestStackedSkillMessages(t *testing.T) {
+	const system = "You have access to the following skills:\n\n- apple: Apple service.\n- banana: Banana service.\n- grape: Grape service."
+	tests := []struct {
+		name, prompt string
+		want         []string
+	}{
+		{"shared arguments", "/apple /grape 4127", []string{"blueberry-4127 (4127/)", "cherry-4127 (4127/)"}},
+		{"prompt order", "/grape /apple 4127", []string{"cherry-4127 (4127/)", "blueberry-4127 (4127/)"}},
+		{"ordinary argument ends expansion", "/apple 4127 /grape", []string{"blueberry-4127 /grape (4127//grape)"}},
+		{"skill name without slash is an argument", "/apple grape /grape", []string{"blueberry-grape /grape (grape//grape)"}},
+		{"unknown skill ends expansion", "/apple /pear 4127 /grape", []string{"blueberry-/pear 4127 /grape (/pear/4127)"}},
+		{"unknown skill after stack is shared argument", "/apple /grape /pear 4127", []string{"blueberry-/pear 4127 (/pear/4127)", "cherry-/pear 4127 (/pear/4127)"}},
+		{"malformed command ends expansion", "/apple /../grape 4127", []string{"blueberry-/../grape 4127 (/../grape/4127)"}},
+		{"no arguments", "/apple /grape \t\n", []string{"blueberry- (/)", "cherry- (/)"}},
+		{"repeated skill", "/apple /apple 4127", []string{"blueberry-4127 (4127/)", "blueberry-4127 (4127/)"}},
+		{"whitespace preserved in shared arguments", "/apple\t\n/grape\u2003 staging\t \neu-west \n", []string{"blueberry-staging\t \neu-west (staging/eu-west)", "cherry-staging\t \neu-west (staging/eu-west)"}},
+		{"inserted placeholders stay literal", "/apple /grape $1 $ARGUMENTS[0]", []string{"blueberry-$1 $ARGUMENTS[0] ($1/$ARGUMENTS[0])", "cherry-$1 $ARGUMENTS[0] ($1/$ARGUMENTS[0])"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTestSkill(t, root, "apple", "Apple service.", "blueberry-$ARGUMENTS ($0/$ARGUMENTS[1])")
+			writeTestSkill(t, root, "banana", "Banana service.", "secret banana body")
+			writeTestSkill(t, root, "grape", "Grape service.", "cherry-$ARGUMENTS ($ARGUMENTS[0]/$1)")
+			got, err := decodeMessages(t, tt.prompt, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []testMessage{{"system", system}}
+			for _, body := range tt.want {
+				want = append(want, testMessage{"user", body})
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("messages = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
 func TestSubstituteSkillArguments(t *testing.T) {
 	tests := []struct {
 		name, body, arguments, want string

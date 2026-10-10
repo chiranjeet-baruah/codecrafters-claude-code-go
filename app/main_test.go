@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -69,6 +70,28 @@ func TestCLI(t *testing.T) {
 				want := "Deploy to staging in region eu-west. Full request was: staging eu-west"
 				if len(messages) != 2 || messages[0] != (testMessage{Role: "system", Content: "You have access to the following skills:\n\n- apple: Deploy service.\n- banana: Other skill."}) || messages[1] != (testMessage{Role: "user", Content: want}) {
 					t.Errorf("messages = %+v", messages)
+				}
+			},
+		},
+		{
+			name: "stacked skills", prompt: "/apple /grape 4127", wantCalls: 1, wantOutput: "blueberry-4127\ncherry-4127",
+			setup: func(t *testing.T, root string) {
+				dir := filepath.Join(root, ".claude", "skills")
+				writeTestSkill(t, dir, "apple", "Apple service.", "Add this exact line to your response: blueberry-$ARGUMENTS")
+				writeTestSkill(t, dir, "banana", "Banana service.", "secret banana body")
+				writeTestSkill(t, dir, "grape", "Grape service.", "Add this exact line to your response: cherry-$ARGUMENTS")
+			},
+			responses: func(t *testing.T, root string) []string {
+				return []string{chatResponse("blueberry-4127\ncherry-4127")}
+			},
+			check: func(t *testing.T, messages []testMessage) {
+				want := []testMessage{
+					{"system", "You have access to the following skills:\n\n- apple: Apple service.\n- banana: Banana service.\n- grape: Grape service."},
+					{"user", "Add this exact line to your response: blueberry-4127"},
+					{"user", "Add this exact line to your response: cherry-4127"},
+				}
+				if !reflect.DeepEqual(messages, want) {
+					t.Errorf("messages = %+v, want %+v", messages, want)
 				}
 			},
 		},
