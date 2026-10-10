@@ -1,6 +1,55 @@
 package main
 
-import "github.com/openai/openai-go/v3"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/openai/openai-go/v3"
+)
+
+func initialMessages(prompt, skillsDir string) ([]openai.ChatCompletionMessageParamUnion, error) {
+	skills, err := discoverSkills(skillsDir)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.HasPrefix(prompt, "/") {
+		name := strings.TrimPrefix(strings.Fields(prompt)[0], "/")
+		if !validSkillName(name) {
+			return nil, fmt.Errorf("invalid skill name %q", name)
+		}
+
+		found := false
+		for _, skill := range skills {
+			if skill.name != name {
+				continue
+			}
+			prompt, err = readSkillBody(skill.path)
+			if err != nil {
+				return nil, fmt.Errorf("load skill %q: %w", name, err)
+			}
+			found = true
+			break
+		}
+		if !found {
+			return nil, fmt.Errorf("unknown skill %q", name)
+		}
+	}
+
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 2)
+	if len(skills) > 0 {
+		var description strings.Builder
+		description.WriteString("You have access to the following skills:\n\n")
+		for i, skill := range skills {
+			if i > 0 {
+				description.WriteByte('\n')
+			}
+			fmt.Fprintf(&description, "- %s: %s", skill.name, skill.description)
+		}
+		messages = append(messages, openai.SystemMessage(description.String()))
+	}
+	return append(messages, userMessage(prompt)), nil
+}
 
 func userMessage(content string) openai.ChatCompletionMessageParamUnion {
 	return openai.ChatCompletionMessageParamUnion{

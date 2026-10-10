@@ -3,19 +3,18 @@ package main
 import (
 	"fmt"
 	"os"
-
-	"github.com/openai/openai-go/v3"
 )
 
 func main() {
 	prompt := parsePrompt()
+	messages, err := initialMessages(prompt, ".claude/skills")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	client := newClient()
 
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
-
-	messages := []openai.ChatCompletionMessageParamUnion{
-		userMessage(prompt),
-	}
 
 	for {
 		resp, err := complete(client, messages)
