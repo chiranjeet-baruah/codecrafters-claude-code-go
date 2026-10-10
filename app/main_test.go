@@ -59,6 +59,19 @@ func TestCLI(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "slash command arguments", prompt: "/apple staging eu-west", wantCalls: 1, wantOutput: "done",
+			setup: func(t *testing.T, root string) {
+				writeTestSkill(t, filepath.Join(root, ".claude", "skills"), "apple", "Deploy service.", "Deploy to $0 in region $ARGUMENTS[1]. Full request was: $ARGUMENTS")
+				writeTestSkill(t, filepath.Join(root, ".claude", "skills"), "banana", "Other skill.", "secret banana body $0")
+			},
+			check: func(t *testing.T, messages []testMessage) {
+				want := "Deploy to staging in region eu-west. Full request was: staging eu-west"
+				if len(messages) != 2 || messages[0] != (testMessage{Role: "system", Content: "You have access to the following skills:\n\n- apple: Deploy service.\n- banana: Other skill."}) || messages[1] != (testMessage{Role: "user", Content: want}) {
+					t.Errorf("messages = %+v", messages)
+				}
+			},
+		},
 		{name: "invalid command never calls API", prompt: "/missing", wantCalls: 0, wantOutput: "unknown skill", wantError: true},
 		{
 			name: "tool call loop", prompt: "read the file", wantCalls: 2, wantOutput: "done",

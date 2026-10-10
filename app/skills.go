@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -14,6 +15,27 @@ type skillInfo struct {
 	name        string
 	description string
 	path        string
+}
+
+var skillPlaceholder = regexp.MustCompile(`\$(?:ARGUMENTS(?:\[[0-9]+\])?|[0-9]+)`)
+
+func substituteSkillArguments(body, arguments string) string {
+	arguments = strings.TrimSpace(arguments)
+	args := strings.Fields(arguments)
+	return skillPlaceholder.ReplaceAllStringFunc(body, func(placeholder string) string {
+		if placeholder == "$ARGUMENTS" {
+			return arguments
+		}
+		indexText := strings.TrimPrefix(placeholder, "$")
+		if strings.HasPrefix(placeholder, "$ARGUMENTS[") {
+			indexText = strings.TrimSuffix(strings.TrimPrefix(placeholder, "$ARGUMENTS["), "]")
+		}
+		index, err := strconv.Atoi(indexText)
+		if err != nil || index >= len(args) {
+			return ""
+		}
+		return args[index]
+	})
 }
 
 func validSkillName(name string) bool {

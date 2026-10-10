@@ -14,7 +14,9 @@ func initialMessages(prompt, skillsDir string) ([]openai.ChatCompletionMessagePa
 	}
 
 	if strings.HasPrefix(prompt, "/") {
-		name := strings.TrimPrefix(strings.Fields(prompt)[0], "/")
+		command := strings.Fields(prompt)[0]
+		name := strings.TrimPrefix(command, "/")
+		arguments := prompt[len(command):]
 		if !validSkillName(name) {
 			return nil, fmt.Errorf("invalid skill name %q", name)
 		}
@@ -28,6 +30,7 @@ func initialMessages(prompt, skillsDir string) ([]openai.ChatCompletionMessagePa
 			if err != nil {
 				return nil, fmt.Errorf("load skill %q: %w", name, err)
 			}
+			prompt = substituteSkillArguments(prompt, arguments)
 			found = true
 			break
 		}
