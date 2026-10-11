@@ -1,34 +1,60 @@
-[![progress-banner](https://backend.codecrafters.io/progress/claude-code/c8efd480-6450-4ded-abaa-a0767e048eb2)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+# Build Your Own Claude Code (Go)
 
-This is a starting point for Go solutions to the
-["Build Your own Claude Code" Challenge](https://codecrafters.io/challenges/claude-code).
+[![CodeCrafters progress](https://backend.codecrafters.io/progress/claude-code/c8efd480-6450-4ded-abaa-a0767e048eb2)](https://codecrafters.io/challenges/claude-code)
 
-Claude Code is an AI coding assistant that uses Large Language Models (LLMs) to
-understand code and perform actions through tool calls. In this challenge,
-you'll build your own Claude Code from scratch by implementing an LLM-powered
-coding assistant.
+A command-line coding agent built for the [CodeCrafters challenge](https://codecrafters.io/challenges/claude-code). It takes one prompt, calls a model through OpenRouter, runs requested tools, and prints the final response.
 
-Along the way you'll learn about HTTP RESTful APIs, OpenAI-compatible tool
-calling, agent loop, and how to integrate multiple tools into an AI assistant.
+## About the project
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+- **Built with:** Go 1.25 and [`openai-go/v3`](https://github.com/openai/openai-go).
+- **Model:** `anthropic/claude-haiku-4.5` (currently fixed in the code).
+- **Tools:** Read files, write files, run Bash commands, and load local skills.
+- **Agent loop:** Keeps calling the model while it requests tools; exits when the model returns a response without tool calls.
 
-# Passing the first stage
+## Getting started
 
-The entry point for your `claude-code` implementation is in `app/main.go`. Study
-and uncomment the relevant code, and submit to pass the first stage:
+1. Install [Go 1.25](https://go.dev/dl/) and obtain an OpenRouter API key with access to the configured model.
+2. From the repository root, set your key and run a prompt:
 
-```sh
-codecrafters submit
+   ```sh
+   export OPENROUTER_API_KEY='your-key'
+   ./your_program.sh -p 'Summarize app/main.go'
+   ```
+
+`OPENROUTER_BASE_URL` is optional; it defaults to `https://openrouter.ai/api/v1`. The `-p` prompt is required. `your_program.sh` builds the Go program before running it.
+
+## Usage
+
+The agent exposes four tools to the model:
+
+| Tool | Action |
+| --- | --- |
+| `Read` | Return a file's contents. |
+| `Write` | Write content to a file. |
+| `Bash` | Run a Bash command. |
+| `Skill` | Load instructions from a local skill. |
+
+### Local skills
+
+At startup, the program looks for `.claude/skills/<name>/SKILL.md` relative to the **current working directory**. This repository does not include any skills. Each skill needs a matching `name` and a `description` in its frontmatter. For example, create `.claude/skills/review/SKILL.md`:
+
+```md
+---
+name: review
+description: Review code changes for bugs.
+---
+
+Review these changes: $ARGUMENTS
 ```
 
-# Stage 2 & beyond
+Run it with `./your_program.sh -p '/review app/main.go'`, or use an ordinary prompt and let the model choose a skill. Skills can use `$ARGUMENTS` for all supplied text and `$0`, `$1`, etc. for individual words. An optional `context: fork` frontmatter field runs the skill in a separate agent context and returns its answer to the main agent.
 
-Note: This section is for stages 2 and beyond.
+**Safety:** `Write` and `Bash` execute without a confirmation step or sandbox in this program. Run it only where you trust the prompt and can tolerate file changes or shell commands. File contents and tool results used by the agent are sent to the configured API.
 
-1. Ensure you have `go (1.25)` installed locally.
-2. Run `./your_program.sh` to run your program, which is implemented in
-   `app/main.go`.
-3. Run `codecrafters submit` to submit your solution to CodeCrafters. Test
-   output will be streamed to your terminal.
+## Development
+
+```sh
+go test ./...
+```
+
+The [CodeCrafters CLI](https://docs.codecrafters.io/challenges/program-interface) can submit this solution with `codecrafters submit`. CodeCrafters uses `.codecrafters/compile.sh` and `.codecrafters/run.sh`; `your_program.sh` is the local entry point.
