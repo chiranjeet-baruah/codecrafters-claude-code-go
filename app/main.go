@@ -1,27 +1,32 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"os"
 
-	"github.com/openai/openai-go/v3"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/adapter/outbound/local"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/adapter/outbound/openrouter"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/application"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/port/inbound"
 )
 
 func main() {
 	prompt := parsePrompt()
-	skills, err := discoverSkills(".claude/skills")
+	skills, err := local.DiscoverSkills(".claude/skills")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	client := newClient()
-	messages, err := initialMessages(prompt, skills, client)
+	var agent inbound.Agent = application.NewAgent(openrouter.NewFromEnv(), local.ToolRunner{}, local.SkillStore{}, skills)
+	session, err := agent.Start(context.Background(), prompt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
-	answer, err := runAgent(client, messages, skills)
+	answer, err := session.Run(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -29,23 +34,12 @@ func main() {
 	fmt.Print(answer)
 }
 
-func runAgent(client *openai.Client, messages []openai.ChatCompletionMessageParamUnion, skills []skillInfo) (string, error) {
-	for {
-		resp, err := complete(client, messages)
-		if err != nil {
-			return "", err
-		}
-
-		message := resp.Choices[0].Message
-		messages = append(messages, assistantMessage(message))
-
-		if len(message.ToolCalls) == 0 {
-			return message.Content, nil
-		}
-
-		for _, toolCall := range message.ToolCalls {
-			result := handleToolCall(toolCall, skills, client)
-			messages = append(messages, toolMessage(toolCall.ID, result))
-		}
+func parsePrompt() string {
+	var prompt string
+	flag.StringVar(&prompt, "p", "", "Prompt to send to LLM")
+	flag.Parse()
+	if prompt == "" {
+		panic("Prompt must not be empty")
 	}
+	return prompt
 }

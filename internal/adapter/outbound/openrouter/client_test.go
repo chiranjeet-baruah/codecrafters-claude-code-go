@@ -1,49 +1,22 @@
-package main
+package openrouter
 
 import (
+	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/openai/openai-go/v3"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/domain"
 )
 
-func TestParsePrompt(t *testing.T) {
-	tests := []struct {
-		name, prompt string
-		wantPanic    bool
-	}{
-		{"ordinary", "hello", false},
-		{"slash command", "/apple", false},
-		{"empty", "", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			originalFlags, originalArgs := flag.CommandLine, os.Args
-			t.Cleanup(func() { flag.CommandLine, os.Args = originalFlags, originalArgs })
-			flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-			flag.CommandLine.SetOutput(io.Discard)
-			os.Args = []string{"program", "-p", tt.prompt}
-			if tt.wantPanic {
-				defer func() {
-					if recover() == nil {
-						t.Fatal("expected empty prompt to panic")
-					}
-				}()
-			}
-			if got := parsePrompt(); got != tt.prompt {
-				t.Fatalf("prompt = %q, want %q", got, tt.prompt)
-			}
-		})
-	}
+type testMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 func TestNewClientAndComplete(t *testing.T) {
@@ -95,12 +68,12 @@ func TestNewClientAndComplete(t *testing.T) {
 			defer server.Close()
 			t.Setenv("OPENROUTER_API_KEY", "test-key")
 			t.Setenv("OPENROUTER_BASE_URL", server.URL)
-			response, err := complete(newClient(), []openai.ChatCompletionMessageParamUnion{userMessage("hello")})
+			response, err := NewFromEnv().Complete(context.Background(), []domain.Message{{Role: "user", Content: "hello"}})
 			if tt.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 					t.Fatalf("error = %v, want containing %q", err, tt.wantError)
 				}
-			} else if err != nil || response.Choices[0].Message.Content != tt.wantResult {
+			} else if err != nil || response.Content != tt.wantResult {
 				t.Fatalf("response = %+v, error = %v; want %q", response, err, tt.wantResult)
 			}
 			if requests.Load() != 1 {
@@ -130,7 +103,7 @@ func TestNewClientConfiguration(t *testing.T) {
 					}
 				}()
 			}
-			if client := newClient(); client == nil {
+			if client := NewFromEnv(); client == nil {
 				t.Fatal("newClient returned nil")
 			}
 		})

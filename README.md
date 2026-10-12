@@ -57,4 +57,6 @@ Run it with `./your_program.sh -p '/review app/main.go'`, or use an ordinary pro
 go test ./...
 ```
 
+The CLI in `app/main.go` wires the agent together. `internal/application` owns the conversation loop and skill workflow; `internal/domain` holds messages, skill metadata, and pure skill rules. `internal/port` defines the agent entry point and the model, tool, and skill-body interfaces. `internal/adapter/outbound/openrouter` translates messages to the OpenAI SDK, while `internal/adapter/outbound/local` handles files, Bash, and local skill files. The application and domain do not import either adapter.
+
 The [CodeCrafters CLI](https://docs.codecrafters.io/challenges/program-interface) can submit this solution with `codecrafters submit`. CodeCrafters uses `.codecrafters/compile.sh` and `.codecrafters/run.sh`; `your_program.sh` is the local entry point.

@@ -1,4 +1,4 @@
-package main
+package local
 
 import (
 	"bufio"
@@ -6,70 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/openai/openai-go/v3"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/domain"
 )
 
-type skillInfo struct {
-	name        string
-	description string
-	context     string
-	path        string
-}
-
-func executeSkill(client *openai.Client, skill skillInfo, arguments string, skills []skillInfo) (string, error) {
-	body, err := readSkillBody(skill.path)
-	if err != nil {
-		return "", fmt.Errorf("loading skill %q: %w", skill.name, err)
-	}
-	body = substituteSkillArguments(body, arguments)
-	if skill.context != "fork" {
-		return body, nil
-	}
-	answer, err := runAgent(client, []openai.ChatCompletionMessageParamUnion{userMessage(body)}, skills)
-	if err != nil {
-		return "", fmt.Errorf("running skill %q in separate context: %w", skill.name, err)
-	}
-	return fmt.Sprintf("Skill %s ran in a separate context and returned: %s", skill.name, answer), nil
-}
-
-var skillPlaceholder = regexp.MustCompile(`\$(?:ARGUMENTS(?:\[[0-9]+\])?|[0-9]+)`)
-
-func substituteSkillArguments(body, arguments string) string {
-	arguments = strings.TrimSpace(arguments)
-	args := strings.Fields(arguments)
-	return skillPlaceholder.ReplaceAllStringFunc(body, func(placeholder string) string {
-		if placeholder == "$ARGUMENTS" {
-			return arguments
-		}
-		indexText := strings.TrimPrefix(placeholder, "$")
-		if strings.HasPrefix(placeholder, "$ARGUMENTS[") {
-			indexText = strings.TrimSuffix(strings.TrimPrefix(placeholder, "$ARGUMENTS["), "]")
-		}
-		index, err := strconv.Atoi(indexText)
-		if err != nil || index >= len(args) {
-			return ""
-		}
-		return args[index]
-	})
-}
-
-func validSkillName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for _, char := range name {
-		if char != '-' && char != '_' && (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') {
-			return false
-		}
-	}
-	return true
-}
-
-func discoverSkills(dir string) ([]skillInfo, error) {
+func DiscoverSkills(dir string) ([]domain.Skill, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -78,9 +21,9 @@ func discoverSkills(dir string) ([]skillInfo, error) {
 		return nil, fmt.Errorf("read skills directory: %w", err)
 	}
 
-	var skills []skillInfo
+	var skills []domain.Skill
 	for _, entry := range entries {
-		if !entry.IsDir() || !validSkillName(entry.Name()) {
+		if !entry.IsDir() || !domain.ValidSkillName(entry.Name()) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name(), "SKILL.md")
@@ -99,12 +42,14 @@ func discoverSkills(dir string) ([]skillInfo, error) {
 		if name != entry.Name() {
 			return nil, fmt.Errorf("skill %q has mismatched name %q", entry.Name(), name)
 		}
-		skills = append(skills, skillInfo{name: name, description: description, context: context, path: path})
+		skills = append(skills, domain.Skill{Name: name, Description: description, Context: context, Path: path})
 	}
 	return skills, nil
 }
 
-func readSkillBody(path string) (string, error) {
+type SkillStore struct{}
+
+func (SkillStore) ReadBody(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open skill body: %w", err)

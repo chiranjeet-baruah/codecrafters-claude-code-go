@@ -1,14 +1,15 @@
-package main
+package application
 
 import (
-	"bufio"
-	"encoding/json"
-	"io"
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/codecrafters-io/claude-code-starter-go/internal/adapter/outbound/local"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/domain"
 )
 
 type testMessage struct {
@@ -36,24 +37,20 @@ func writeRawSkill(t *testing.T, root, name, content string) {
 
 func decodeMessages(t *testing.T, prompt, root string) ([]testMessage, error) {
 	t.Helper()
-	skills, err := discoverSkills(root)
+	skills, err := local.DiscoverSkills(root)
 	if err != nil {
 		return nil, err
 	}
-	messages, err := initialMessages(prompt, skills, nil)
+	messages, err := NewAgent(nil, nil, local.SkillStore{}, skills).initialMessages(context.Background(), prompt)
 	if err != nil {
 		if messages != nil {
 			t.Fatalf("got messages on error: %+v", messages)
 		}
 		return nil, err
 	}
-	data, err := json.Marshal(messages)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded []testMessage
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatal(err)
+	decoded := make([]testMessage, len(messages))
+	for i, message := range messages {
+		decoded[i] = testMessage{Role: message.Role, Content: message.Content}
 	}
 	return decoded, nil
 }
@@ -212,166 +209,78 @@ func TestStackedSkillMessages(t *testing.T) {
 	}
 }
 
-func TestSubstituteSkillArguments(t *testing.T) {
+func TestHandleSkillToolCall(t *testing.T) {
 	tests := []struct {
-		name, body, arguments, want string
+		name, arguments, body, want, wantPrefix string
+		noSkills                                bool
+		afterDiscovery                          func(*testing.T, string)
 	}{
+		{name: "selected body only", arguments: `{"name":"apple"}`, body: "Respond with exactly one word: blueberry", want: "Respond with exactly one word: blueberry"},
+		{name: "omitted arguments", arguments: `{"name":"apple"}`, body: "[$ARGUMENTS][$0][$ARGUMENTS[1]]", want: "[][][]"},
+		{name: "supplied arguments", arguments: `{"name":"apple","args":"staging eu-west"}`, body: "Deploy to $0 in $ARGUMENTS[1]. Request: $ARGUMENTS. Again: $0/$1", want: "Deploy to staging in eu-west. Request: staging eu-west. Again: staging/eu-west"},
+		{name: "formatting and whitespace", arguments: `{"name":"apple","args":" \tstaging\t \neu-west \n"}`, body: "  $0\n\n$1\n$ARGUMENTS  ", want: "  staging\n\neu-west\nstaging\t \neu-west  "},
+		{name: "inserted placeholders stay literal", arguments: `{"name":"apple","args":"$1 $ARGUMENTS[0]"}`, body: "$0|$1|$ARGUMENTS", want: "$1|$ARGUMENTS[0]|$1 $ARGUMENTS[0]"},
+		{name: "invalid JSON", arguments: "{", wantPrefix: "error parsing arguments:"},
+		{name: "invalid name type", arguments: `{"name":42}`, wantPrefix: "error parsing arguments:"},
+		{name: "invalid args type", arguments: `{"name":"apple","args":[]}`, wantPrefix: "error parsing arguments:"},
+		{name: "missing name", arguments: `{}`, want: `error: invalid skill name ""`},
+		{name: "empty name", arguments: `{"name":""}`, want: `error: invalid skill name ""`},
+		{name: "unsafe name", arguments: `{"name":"../apple"}`, want: `error: invalid skill name "../apple"`},
+		{name: "leading slash", arguments: `{"name":"/apple"}`, want: `error: invalid skill name "/apple"`},
+		{name: "unknown skill", arguments: `{"name":"pear"}`, want: `error: unknown skill "pear"`},
+		{name: "case sensitive", arguments: `{"name":"Apple"}`, want: `error: unknown skill "Apple"`},
+		{name: "no catalog", arguments: `{"name":"apple"}`, noSkills: true, want: `error: unknown skill "apple"`},
 		{
-			name:      "deployment example",
-			body:      "Deploy to $0 in region $1. Full request was: $ARGUMENTS",
-			arguments: "staging eu-west",
-			want:      "Deploy to staging in region eu-west. Full request was: staging eu-west",
-		},
-		{
-			name:      "mixed repeated placeholders",
-			body:      "$ARGUMENTS[0]/$0/$ARGUMENTS[1]/$1/$ARGUMENTS/$ARGUMENTS/$0",
-			arguments: "staging eu-west",
-			want:      "staging/staging/eu-west/eu-west/staging eu-west/staging eu-west/staging",
-		},
-		{
-			name:      "multi digit indexes",
-			body:      "$10/$ARGUMENTS[10]/$1/$ARGUMENTS[11]",
-			arguments: "a b c d e f g h i j k l",
-			want:      "k/k/b/l",
-		},
-		{
-			name:      "whitespace and body formatting",
-			body:      "  $0\n\n$ARGUMENTS[1]\n$ARGUMENTS  ",
-			arguments: " \tstaging\t \neu-west\r\n ",
-			want:      "  staging\n\neu-west\nstaging\t \neu-west  ",
-		},
-		{name: "no arguments", body: "[$ARGUMENTS][$0][$ARGUMENTS[1]]", want: "[][][]"},
-		{name: "missing argument", body: "$0/$1/$ARGUMENTS[2]", arguments: "staging", want: "staging//"},
-		{name: "index overflow", body: "[$999999999999999999999999999999][$ARGUMENTS[999999999999999999999999999999]]", arguments: "staging", want: "[][]"},
-		{
-			name:      "argument placeholders remain literal",
-			body:      "$0|$1|$ARGUMENTS[2]|$ARGUMENTS",
-			arguments: "$1 $ARGUMENTS[0] $ARGUMENTS",
-			want:      "$1|$ARGUMENTS[0]|$ARGUMENTS|$1 $ARGUMENTS[0] $ARGUMENTS",
-		},
-		{name: "no placeholders", body: "Deploy blueberry.", arguments: "staging", want: "Deploy blueberry."},
-		{name: "quotes are literal", body: "$0|$1", arguments: "\"staging eu-west\"", want: "\"staging|eu-west\""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := substituteSkillArguments(tt.body, tt.arguments); got != tt.want {
-				t.Fatalf("substituteSkillArguments(%q, %q) = %q, want %q", tt.body, tt.arguments, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestValidSkillName(t *testing.T) {
-	tests := []struct {
-		name string
-		want bool
-	}{
-		{"apple", true}, {"apple-2_test", true}, {"", false}, {"../apple", false}, {"apple/banana", false}, {"apple space", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := validSkillName(tt.name); got != tt.want {
-				t.Fatalf("validSkillName(%q) = %v, want %v", tt.name, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestReadSkillFrontmatter(t *testing.T) {
-	tests := []struct {
-		name, input, wantName, wantDescription, wantBody, wantErr string
-	}{
-		{"plain", "---\nname: apple\ndescription: Deploy target\n---\nbody", "apple", "Deploy target", "body", ""},
-		{"quoted CRLF", "---\r\nname: \"apple\"\r\ndescription: 'Bob''s target'\r\n---\r\nbody", "apple", "Bob's target", "body", ""},
-		{"missing opening", "name: apple\n---\n", "", "", "", "missing opening"},
-		{"missing closing", "---\nname: apple\ndescription: target", "", "", "", "missing closing"},
-		{"missing metadata", "---\nname: apple\n---\n", "", "", "", "missing name or description"},
-		{"invalid quoted metadata", "---\nname: \"apple\ndescription: target\n---\n", "", "", "", "invalid quoted name"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reader := bufio.NewReader(strings.NewReader(tt.input))
-			name, description, _, err := readSkillFrontmatter(reader)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			body, err := io.ReadAll(reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if name != tt.wantName || description != tt.wantDescription || string(body) != tt.wantBody {
-				t.Fatalf("got (%q, %q, %q), want (%q, %q, %q)", name, description, body, tt.wantName, tt.wantDescription, tt.wantBody)
-			}
-		})
-	}
-}
-
-func TestReadSkillBody(t *testing.T) {
-	tests := []struct {
-		name, content, wantBody, wantErr string
-	}{
-		{"preserves internal formatting", "---\nname: apple\ndescription: Target\n---\n\n  first line\n\nsecond line  \n", "  first line\n\nsecond line  ", ""},
-		{"missing file", "", "", "open skill body"},
-		{"malformed frontmatter", "body only", "", "parse skill body"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "SKILL.md")
-			if tt.name != "missing file" {
-				if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+			name: "removed after discovery", arguments: `{"name":"apple"}`, wantPrefix: `error loading skill "apple": open skill body:`,
+			afterDiscovery: func(t *testing.T, dir string) {
+				if err := os.Remove(filepath.Join(dir, "apple", "SKILL.md")); err != nil {
 					t.Fatal(err)
 				}
-			}
-			body, err := readSkillBody(path)
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			},
+		},
+		{
+			name: "corrupted after discovery", arguments: `{"name":"apple"}`, wantPrefix: `error loading skill "apple": parse skill body:`,
+			afterDiscovery: func(t *testing.T, dir string) {
+				writeRawSkill(t, dir, "apple", "no frontmatter")
+			},
+		},
+		{
+			name: "unselected body is never loaded", arguments: `{"name":"apple"}`, body: "blueberry", want: "blueberry",
+			afterDiscovery: func(t *testing.T, dir string) {
+				if err := os.Remove(filepath.Join(dir, "grape", "SKILL.md")); err != nil {
+					t.Fatal(err)
 				}
-				return
-			}
-			if err != nil || body != tt.wantBody {
-				t.Fatalf("body = %q, error = %v; want %q", body, err, tt.wantBody)
-			}
-		})
-	}
-}
-
-func TestSkillContext(t *testing.T) {
-	tests := []struct {
-		name, frontmatter, wantContext string
-	}{
-		{"absent", "", ""},
-		{"plain fork", "context: fork\n", "fork"},
-		{"no space", "context:fork\n", "fork"},
-		{"double quoted", "context: \"fork\"\n", "fork"},
-		{"single quoted", "context: 'fork'\n", "fork"},
-		{"surrounding whitespace", " context : \tfork \t\n", "fork"},
-		{"other context", "context: inline\n", "inline"},
-		{"case sensitive", "context: Fork\n", "Fork"},
-		{"agent ignored", "agent: fork\n", ""},
-		{"fork with agent", "context: fork\nagent: reviewer\n", "fork"},
+			},
+		},
+		{
+			name: "new skill is not in startup catalog", arguments: `{"name":"pear"}`, want: `error: unknown skill "pear"`,
+			afterDiscovery: func(t *testing.T, dir string) {
+				writeTestSkill(t, dir, "pear", "Other skill.", "undiscovered instructions")
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			writeRawSkill(t, dir, "apple", "---\nname: apple\ndescription: On-call rotation.\n"+tt.frontmatter+"---\n\nsecret body\n")
-			skills, err := discoverSkills(dir)
+			if !tt.noSkills {
+				writeTestSkill(t, dir, "apple", "Migration status.", tt.body)
+				writeTestSkill(t, dir, "grape", "Format code.", "secret grape instructions")
+			}
+			skills, err := local.DiscoverSkills(dir)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []skillInfo{{name: "apple", description: "On-call rotation.", context: tt.wantContext, path: filepath.Join(dir, "apple", "SKILL.md")}}
-			if !reflect.DeepEqual(skills, want) {
-				t.Fatalf("skills = %+v, want %+v", skills, want)
+			if tt.afterDiscovery != nil {
+				tt.afterDiscovery(t, dir)
 			}
-			body, err := readSkillBody(skills[0].path)
-			if err != nil || body != "secret body" {
-				t.Fatalf("body = %q, error = %v", body, err)
+			agent := NewAgent(nil, nil, local.SkillStore{}, skills)
+			got := agent.handleToolCall(context.Background(), domain.ToolCall{Name: "Skill", Arguments: tt.arguments})
+			if tt.wantPrefix != "" {
+				if !strings.HasPrefix(got, tt.wantPrefix) {
+					t.Fatalf("result = %q, want prefix %q", got, tt.wantPrefix)
+				}
+			} else if got != tt.want {
+				t.Fatalf("result = %q, want %q", got, tt.want)
 			}
 		})
 	}
